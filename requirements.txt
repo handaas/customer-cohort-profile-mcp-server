@@ -1,0 +1,5 @@
+mcp>=1.26,<2
+python-dotenv>=1,<2
+httpx>=0.28,<1
+jsonschema[format-nongpl]>=4.20,<5
+uvicorn>=0.31,<1

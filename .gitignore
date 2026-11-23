@@ -1,0 +1,10 @@
+.env
+mcp_env/
+.venv/
+__pycache__/
+*.py[cod]
+*.sqlite3*
+*.db*
+state/
+.pytest_cache/
+.DS_Store
