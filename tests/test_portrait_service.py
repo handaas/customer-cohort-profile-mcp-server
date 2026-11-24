@@ -100,6 +100,56 @@ class LocalProvider:
                 raise AssertionError('Expected restaurant brand ID')
             data = {'cityStatsList':[{'city':'上海市','count':2}], 'provinceStatsList':[{'province':'上海市','count':2}],
                     'cityStatsTotal':1,'provinceStatsTotal':1}
+        elif pid == P['对外投资']:
+            data = {'resultList': [
+                {'name':'样本被投科技有限公司','scCode':'91310000MA00000003','ratio':51.0,
+                 'subscriptionAmount':{'value':100,'coinType':'万元'},'regCapital':{'value':500,'coinType':'万元'},
+                 'foundTime':'2018-06-01','operStatus':'存续','isListed':0,
+                 'addressValue':{'province':'上海市','city':'上海市'},'business':'技术开发'},
+                {'name':'样本参股企业','scCode':'91310000MA00000004','ratio':'12.3456%',
+                 'subscriptionAmount':{'value':20,'coinType':'万元'},'regCapital':{'value':200,'coinType':'万元'},
+                 'foundTime':'2020-01-02','operStatus':'存续','isListed':1,
+                 'addressValue':{'province':'江苏省','city':'南京市'},'business':'零售'},
+            ], 'total': 2}
+        elif pid == P['推广情况']:
+            data = {'lastPrmtTime':'2019-03-04','prmtCompetitorsNumber':3,'prmtLinksNumber':0,
+                    'prmtSources':['搜索引擎','展会']}
+        elif pid == P['域名信息']:
+            data = {'resultList': [
+                {'domainName':'sample.example','domainUrl':'https://www.sample.example',
+                 'filingAuditTime':'2017-05-06','isHomePage':1,'websiteRecord':'沪ICP备00000001号'},
+                {'domainName':'sample2.example','domainUrl':'https://sample2.example',
+                 'filingAuditTime':'2026-01-02','isHomePage':0,'websiteRecord':'沪ICP备00000002号'},
+            ], 'total': 2}
+        elif pid == P['企业官网信息']:
+            data = {'domain400Phone':'400-000-0000','domainAppDownload':True,'domainApplyTrial':False,
+                    'domainCustomerCase':True,'domainEnglishVersion':False,'domainHttps':True,
+                    'domainJoinUs':False,'domainLogin':False,'domainMerchant':True,'domainSolution':False,
+                    'domainStatsModule':True,'domainServiceOnLineList':['客服甲']}
+        elif pid == P['法律诉讼风险概况']:
+            data = {
+                'caKaitingList':[
+                    {'_id':'k-1','caPublishDate':'2025-04-05','caRelatedCaseNumber':'CASE-SHARED','caType':'开庭公告'},
+                    {'_id':'k-future','caPublishDate':'2099-01-01','caRelatedCaseNumber':'CASE-FUTURE','caType':'开庭公告'},
+                ],
+                'caLianList':[],
+                'caList':[{'_id':'c-1','caPublishDate':'2025-04-10','caRelatedCaseNumber':'CASE-SHARED','caType':'法院公告'}],
+                'edList':[{'_id':'e-1','efDishonestCaseCreateTime':'2024-01-01','efDishonestCaseNumber':'CASE-OLD'}],
+                'enforcementList':[],
+                'jdList':[{'_id':'j-1','jdCaseNumber':'CASE-SHARED','jdPublishDate':'2025-05-02'}],
+                'limitedList':[],
+                'caKaitingTotal':2,'caLianTotal':0,'caTotal':1,'edTotal':1,
+                'enforcementTotal':0,'jdTotal':1,
+            }
+        elif pid == P['经营异常']:
+            data = {'anomalyCount':4,'anomalyList':[
+                {'createAuthority':'上海市监局','createDate':'2019-01-05','createReason':'未按规定公示年报',
+                 'removeAuthority':'上海市监局','removeDate':'2025-04-15','removeReason':'已补报'},
+                {'createAuthority':'上海市监局','createDate':'2025-05-01','createReason':'住所无法联系'},
+                {'createAuthority':'上海市监局','createDate':'2018-02-01','createReason':'历史异常',
+                 'removeAuthority':'上海市监局','removeDate':'2019-02-01','removeReason':'已移出'},
+                {'createAuthority':'上海市监局','createDate':'2024-01-01','createReason':'公示信息隐瞒'},
+            ]}
         else:
             raise AssertionError('Unselected product called')
         return httpx.Response(200, json={'code':'10000','data':data})
@@ -313,6 +363,119 @@ class ServiceWorkflow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reused['usage']['calls_used'], 0)
         self.assertEqual(len(self.provider.calls), calls)
 
+    async def test_new_topics_keep_dates_totals_shared_cases_and_anomaly_intervals(self):
+        plan = await self.base([{'row_id': 'row_new_topics', 'enterprise_name': NAME}])
+        base, _ = await self.execute(plan)
+        sid = base['result']['snapshot_id']
+        subject = (await self.call('read_page', snapshot_id=sid, view='subjects'))['records'][0]
+        selections = [
+            dict(cohort_key='新专题客群', topic='investment', subject_ids=[subject['subject_id']],
+                 product_ids=[P['对外投资']]),
+            dict(cohort_key='新专题客群', topic='promotion', subject_ids=[subject['subject_id']],
+                 product_ids=[P['推广情况']]),
+            dict(cohort_key='新专题客群', topic='website', subject_ids=[subject['subject_id']],
+                 product_ids=[P['域名信息'], P['企业官网信息']]),
+            dict(cohort_key='新专题客群', topic='risk', subject_ids=[subject['subject_id']],
+                 product_ids=[P['法律诉讼风险概况'], P['经营异常']]),
+        ]
+        scoped = await self.call(
+            'plan_topics', snapshot_id=sid, analysis_scope_hash=digest('新专题范围'),
+            period=PERIOD, limits=LIMITS, selections=selections,
+        )
+        self.assertEqual(set(scoped['scope']['topic_keys']), {'investment', 'promotion', 'website', 'risk'})
+        self.assertEqual(
+            {p['routing_key'] for p in scoped['estimate']['products']},
+            {'investment', 'promotion', 'website', 'risk'},
+        )
+        run, _ = await self.execute(scoped)
+        self.assertEqual(run['state'], 'succeeded', run.get('error'))
+        last = run['result']['snapshot_id']
+        evidence, cursor = [], None
+        while True:
+            page = await self.call(
+                'read_page', snapshot_id=last, view='evidence', limit=200,
+                **({'cursor': cursor} if cursor else {}),
+            )
+            evidence.extend(page['records'])
+            if not page['has_more']:
+                break
+            cursor = page['next_cursor']
+        by_field = {}
+        for item in evidence:
+            by_field.setdefault((item['product_id'], item['source_field']), []).append(item)
+
+        ratios = by_field[(P['对外投资'], 'resultList.ratio')]
+        numeric_ratio = next(e for e in ratios if e['raw_value'] == 51.0)
+        textual_ratio = next(e for e in ratios if e['raw_value'] == '12.3456%')
+        self.assertEqual(numeric_ratio['unit'], 'none')
+        self.assertEqual(textual_ratio['raw_value'], '12.3456%')
+        self.assertEqual(textual_ratio['unit'], '%')
+        investees = {e['raw_value'] for e in by_field[(P['对外投资'], 'resultList.name')]}
+        self.assertEqual(investees, {'样本被投科技有限公司', '样本参股企业'})
+        self.assertNotIn(NAME, investees)
+        self.assertEqual(by_field[(P['对外投资'], 'total')][0]['raw_value'], 2)
+
+        promotion_time = by_field[(P['推广情况'], 'lastPrmtTime')][0]
+        self.assertEqual(promotion_time['raw_value'], '2019-03-04')
+        self.assertEqual(promotion_time['status'], 'observed')
+        self.assertEqual(by_field[(P['推广情况'], 'prmtLinksNumber')][0]['status'], 'zero')
+        self.assertEqual(
+            by_field[(P['推广情况'], 'prmtSources')][0]['raw_value'], ['搜索引擎', '展会']
+        )
+
+        audit_dates = {e['raw_value'] for e in by_field[(P['域名信息'], 'resultList.filingAuditTime')]}
+        self.assertEqual(audit_dates, {'2017-05-06', '2026-01-02'})
+        self.assertEqual(by_field[(P['域名信息'], 'total')][0]['raw_value'], 2)
+
+        modules = {
+            item['source_field']: item
+            for item in evidence if item['product_id'] == P['企业官网信息']
+        }
+        self.assertEqual(len(modules), 10)
+        self.assertNotIn('domain400Phone', modules)
+        self.assertNotIn('domainServiceOnLineList', modules)
+        self.assertIs(modules['domainApplyTrial']['raw_value'], False)
+        self.assertEqual(modules['domainApplyTrial']['status'], 'observed')
+
+        legal = P['法律诉讼风险概况']
+        totals = {field: by_field[(legal, field)][0] for field in (
+            'caKaitingTotal', 'caLianTotal', 'caTotal', 'edTotal',
+            'enforcementTotal', 'jdTotal', 'limitedTotal',
+        )}
+        self.assertEqual(totals['caKaitingTotal']['raw_value'], 2)
+        self.assertEqual(totals['caLianTotal']['status'], 'zero')
+        self.assertEqual(totals['enforcementTotal']['status'], 'zero')
+        self.assertEqual(totals['limitedTotal']['status'], 'not_returned')
+        self.assertEqual(totals['edTotal']['raw_value'], 1)
+        shared = [
+            item for item in evidence
+            if item['product_id'] == legal and item.get('raw_value') == 'CASE-SHARED'
+        ]
+        self.assertEqual(len(shared), 3)
+        self.assertEqual(len({item['evidence_id'] for item in shared}), 3)
+        self.assertTrue(all(item['topic'] == 'risk' for item in shared))
+        self.assertFalse(any(item.get('raw_value') == 'CASE-FUTURE' for item in evidence))
+        self.assertFalse(any(item.get('raw_value') == 'CASE-OLD' for item in evidence))
+
+        anomaly = P['经营异常']
+        reasons = {
+            item['raw_value']
+            for item in by_field[(anomaly, 'anomalyList.createReason')]
+        }
+        self.assertEqual(reasons, {'未按规定公示年报', '住所无法联系', '公示信息隐瞒'})
+        self.assertNotIn('历史异常', reasons)
+        removals = by_field[(anomaly, 'anomalyList.removeDate')]
+        self.assertEqual(len(removals), 3)
+        self.assertEqual(sum(e['status'] == 'not_returned' for e in removals), 2)
+        self.assertEqual(by_field[(anomaly, 'anomalyCount')][0]['raw_value'], 4)
+        anomaly_evidence = [e for e in evidence if e['product_id'] == anomaly]
+        self.assertFalse(any('unresolved' in json.dumps(e, ensure_ascii=False) for e in anomaly_evidence))
+
+        coverage = (await self.call('read_page', snapshot_id=last, view='coverage', limit=200))['records']
+        legal_coverage = next(c for c in coverage if c['product_id'] == legal)
+        self.assertIn('excluded_publish_after_cutoff:1', legal_coverage.get('reason') or '')
+        self.assertNotIn('unresolved', legal_coverage.get('reason') or '')
+
     async def test_real_stdio_and_http(self):
         child_env=dict(os.environ,PORTRAIT_LIVE='0',PORTRAIT_DB_PATH=str(self.root/'stdio.sqlite3'))
         params=StdioServerParameters(command=sys.executable,args=[str(ROOT/'server/mcp_server.py'),'stdio'],env=child_env)
@@ -374,3 +537,28 @@ class ServiceWorkflow(unittest.IsolatedAsyncioTestCase):
             finally:
                 svc.should_exit=True
                 await asyncio.wait_for(running,10)
+
+
+class ContractSurface(unittest.TestCase):
+    def test_new_topics_and_products_are_publicly_allowlisted(self):
+        from server import mcp_contract
+
+        expected = {
+            'investment': ('669e5ee54efb02e6f96c7c9c',),
+            'promotion': ('66c33eff3c0917a9a02febdd',),
+            'website': ('66a0f258ce3408eb23b56706', '66bf124bf134a4c21b4fc2cb'),
+            'risk': ('66bb1aa834d3cd3e43928163', '66a248f381d41651f2689d95'),
+        }
+        self.assertEqual(len(mcp_contract.ALL_PRODUCT_IDS), 43)
+        self.assertEqual(len(mcp_contract.TOPIC_KEYS), 17)
+        tools = {tool['name']: tool for tool in mcp_contract.build_tools()}
+        selections = tools['portrait_plan_topics']['inputSchema']['properties']['selections']['items']['oneOf']
+        by_topic = {variant['properties']['topic']['const']: variant for variant in selections}
+        for topic, product_ids in expected.items():
+            self.assertEqual(
+                set(by_topic[topic]['properties']['product_ids']['items']['enum']),
+                set(product_ids),
+            )
+        progress = tools['portrait_get_run']['outputSchema']['properties']['progress']['properties']
+        self.assertEqual(progress['products_total']['maximum'], 43)
+        self.assertEqual(progress['products_completed']['maximum'], 43)

@@ -329,10 +329,16 @@ def business_time(
         parsed = _first_time_from_fields(record, record_path, fields)
         if parsed:
             return parsed
-    elif basis == "event_date":
+    elif basis in ("event_date", "event_interval"):
         parsed = _first_time_from_fields(record, record_path, fields)
         if parsed:
             return parsed
+        if basis == "event_interval":
+            parsed = _first_time_from_fields(
+                record, record_path, list(time_meta.get("end_fields") or [])
+            )
+            if parsed:
+                return parsed
         # Some products do not declare every date field; scan temporal leaves.
         for leaf, value in _iter_leaves(record):
             if _is_temporal_field(leaf):
@@ -346,13 +352,106 @@ def business_time(
             if parsed:
                 return parsed
 
-    if basis == "event_date":
+    if basis in ("event_date", "event_interval"):
         for leaf, value in _iter_leaves(record):
             if _is_temporal_field(leaf):
                 parsed = parse_time(value)
                 if parsed:
                     return parsed
     return {"granularity": "unknown"}
+
+
+def _window_decision(
+    bt: Dict[str, str],
+    *,
+    allowed_months: Optional[Sequence[str]],
+    allowed_years: Optional[Sequence[str]],
+    window_start: Optional[date],
+    window_end: Optional[date],
+    cutoff: Optional[date],
+) -> Optional[str]:
+    """Return include/exclude for one parsed time, or None when unknown."""
+    granularity = bt.get("granularity")
+    value = bt.get("value")
+    if granularity in ("unknown", None) or not value:
+        return None
+    months = set(allowed_months or ())
+    years = set(allowed_years or ())
+    if granularity == "month":
+        if months and value not in months:
+            return "exclude"
+        return "include"
+    if granularity == "year":
+        if years and value not in years:
+            return "exclude"
+        return "include"
+    if granularity == "day":
+        try:
+            observed = date.fromisoformat(value)
+        except ValueError:
+            return None
+        if window_start and observed < window_start:
+            return "exclude"
+        if window_end and observed > window_end:
+            return "exclude"
+        if cutoff and observed > cutoff:
+            return "exclude"
+        return "include"
+    return None
+
+
+def _parsed_day(bt: Optional[Dict[str, str]]) -> Optional[date]:
+    """Best-effort calendar day for interval overlap; month/year use day one."""
+    if not bt:
+        return None
+    value = bt.get("value")
+    granularity = bt.get("granularity")
+    if not value:
+        return None
+    try:
+        if granularity == "day":
+            return date.fromisoformat(value)
+        if granularity == "month":
+            year, month = (int(part) for part in value.split("-"))
+            return date(year, month, 1)
+        if granularity == "year":
+            return date(int(value), 1, 1)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _interval_decision(
+    route: Dict[str, Any],
+    record_path: str,
+    record: Dict[str, Any],
+    *,
+    window_start: Optional[date],
+    window_end: Optional[date],
+    cutoff: Optional[date],
+) -> str:
+    """Include an interval when [start, end-or-open] overlaps the window.
+
+    Used by products such as 经营异常 where 列入 and 移出 are two event dates.
+    A missing end date is an open interval, never a confirmed resolution state.
+    """
+    time_meta = route.get("time") or {}
+    start = _first_time_from_fields(record, record_path, time_meta.get("fields") or [])
+    end = _first_time_from_fields(record, record_path, time_meta.get("end_fields") or [])
+    start_day = _parsed_day(start)
+    end_day = _parsed_day(end)
+    if start_day is None and end_day is None:
+        return "include"
+    if window_end:
+        if start_day is not None and start_day > window_end:
+            return "exclude"
+        if start_day is None and end_day is not None and end_day > window_end:
+            return "include"
+    if window_start and end_day is not None and end_day < window_start:
+        return "exclude"
+    if cutoff and start_day is not None and start_day > cutoff:
+        return "exclude"
+    return "include"
 
 
 def period_decision(
@@ -373,33 +472,15 @@ def period_decision(
     basis = (route.get("time") or {}).get("basis") or "snapshot"
     if basis == "snapshot":
         return "include"
-    granularity = bt.get("granularity")
-    value = bt.get("value")
-    if granularity in ("unknown", None) or not value:
-        return "include"
-    months = set(allowed_months or ())
-    years = set(allowed_years or ())
-    if granularity == "month":
-        if months and value not in months:
-            return "exclude"
-        return "include"
-    if granularity == "year":
-        if years and value not in years:
-            return "exclude"
-        return "include"
-    if granularity == "day":
-        try:
-            observed = date.fromisoformat(value)
-        except ValueError:
-            return "include"
-        if window_start and observed < window_start:
-            return "exclude"
-        if window_end and observed > window_end:
-            return "exclude"
-        if cutoff and observed > cutoff:
-            return "exclude"
-        return "include"
-    return "include"
+    decision = _window_decision(
+        bt,
+        allowed_months=allowed_months,
+        allowed_years=allowed_years,
+        window_start=window_start,
+        window_end=window_end,
+        cutoff=cutoff,
+    )
+    return decision or "include"
 
 
 # ---------------------------------------------------------------------------
@@ -891,27 +972,36 @@ def record_stats(
     excluded: List[Tuple[str, int, Dict[str, Any]]] = []
     undated = 0
     late_publish = 0
+    basis = (route.get("time") or {}).get("basis") or "snapshot"
     for path, index, record in records:
         if _published_after_cutoff(route, path, record, cutoff):
             excluded.append((path, index, record))
             late_publish += 1
             continue
         bt = business_time(route, path, record, request_params)
-        decision = period_decision(
-            route,
-            bt,
-            allowed_months=allowed_months,
-            allowed_years=allowed_years,
-            window_start=window_start,
-            window_end=window_end,
-            cutoff=cutoff,
-        )
+        if basis == "event_interval":
+            decision = _interval_decision(
+                route,
+                path,
+                record,
+                window_start=window_start,
+                window_end=window_end,
+                cutoff=cutoff,
+            )
+        else:
+            decision = period_decision(
+                route,
+                bt,
+                allowed_months=allowed_months,
+                allowed_years=allowed_years,
+                window_start=window_start,
+                window_end=window_end,
+                cutoff=cutoff,
+            )
         if decision == "exclude":
             excluded.append((path, index, record))
             continue
-        if bt.get("granularity") == "unknown" and (route.get("time") or {}).get("basis") not in (
-            "snapshot",
-        ):
+        if bt.get("granularity") == "unknown" and basis not in ("snapshot",):
             undated += 1
         included.append((path, index, record))
     return {

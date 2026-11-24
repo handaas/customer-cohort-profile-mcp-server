@@ -424,8 +424,8 @@ class Engine:
             'created_at': row['created_at'],
             'updated_at': row['updated_at'],
             'progress': {
-                'products_total': _clamp(row['products_total'], 0, 37),
-                'products_completed': _clamp(row['products_completed'], 0, 37),
+                'products_total': _clamp(row['products_total'], 0, 43),
+                'products_completed': _clamp(row['products_completed'], 0, 43),
                 'subjects_total': _clamp(row['subjects_total'], 0, 100_000),
                 'subjects_completed': _clamp(row['subjects_completed'], 0, 100_000),
                 'pages_written': _clamp(row['pages_written'], 0, 10_000_000),

@@ -40,7 +40,7 @@ HTTP：在服务端私密配置中设置 `CUSTOMER_COHORT_PROFILE_MCP_TOKEN`（�
 
 ### 证据和恢复
 
-37 个数据产品的允许参数、时间和来源字段见 [product-routes.json](server/product-routes.json)。建筑合同只接受已查项目的 `_id`，餐饮门店统计只接受父记录的 `brandId`，店铺月销售只接受同一父记录、同一月份的 `platform + shopId + statsMonth`。没有日期筛选的原始接口不得虚构历史时点；历史事件、报告期和资料取得时间是不同概念。
+43 个数据产品的允许参数、时间和来源字段见 [product-routes.json](server/product-routes.json)。建筑合同只接受已查项目的 `_id`，餐饮门店统计只接受父记录的 `brandId`，店铺月销售只接受同一父记录、同一月份的 `platform + shopId + statsMonth`。新增对外投资、推广情况、域名信息／企业官网信息、法律诉讼风险概况／经营异常：前四个产品是当前快照，日期字段只是字段日期，不用于过滤；诉讼七类累计数各自独立、不相加，明细按各自公告/立案/发布日期进入观察窗口；经营异常按列入日至移出日（未移出为开口区间）与窗口相交纳入，缺少移出日期只表示接口未返回，不能写成已确认未移出或仍异常。没有日期筛选的原始接口不得虚构历史时点；历史事件、报告期和资料取得时间是不同概念。
 
 客户端用 `run_id` 读取状态和结果快照。部分覆盖、真实为零、未披露、未查和失败不混记。`portrait_read_page` 只翻阅已取得的数据。重启后沿用同一 SQLite 账本，不要删除数据库来重试状态不明的请求。默认路径 `~/.local/share/handaas/customer-cohort-profile/portrait.sqlite3`，可用 `PORTRAIT_DB_PATH` 改为服务账户专用路径。数据库、WAL 和备份均包含客户数据，应独立保护。快照到期不代表部署备份已删除。
 

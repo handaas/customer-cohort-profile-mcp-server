@@ -26,7 +26,7 @@
 
 异常约定（均为脱敏固定文案，绝不携带网关响应、状态码、请求 ID、签名或凭据）：
 
-- ``invalid_argument``：产品不在 37 项白名单、字段/类型/枚举/分页/月年越界，未发请求；
+- ``invalid_argument``：产品不在 43 项白名单、字段/类型/枚举/分页/月年越界，未发请求；
 - ``configuration_error``：凭据缺失/占位/含空白或控制字符、客户端已关闭或
   ``INTEGRATOR_ID`` 路径非法，未发请求；
 - ``upstream_unavailable``：确定未送达、限流或网关重定向，未取得数据，可退避重试；
@@ -126,8 +126,8 @@ def _build_specs() -> dict[str, dict[str, dict[str, Any]]]:
             fields[name] = rule
         specs[product_id] = fields
 
-    if len(specs) != 37 or set(specs) != set(ROUTES):
-        raise RuntimeError("上游产品白名单必须完整覆盖 37 个共享路由")
+    if len(specs) != 43 or set(specs) != set(ROUTES):
+        raise RuntimeError("上游产品白名单必须完整覆盖 43 个共享路由")
     return specs
 
 
