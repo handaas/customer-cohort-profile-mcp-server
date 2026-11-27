@@ -18,7 +18,7 @@
 
 成功解析（仅接受官方信封）：
 
-- ``code`` 为 ``"1"`` 或 ``"10000"``：返回原始 ``data`` 字典；``data`` 为空或缺省返回 ``{}``；
+- ``code`` 为 ``"1"`` 或 ``"10000"``：返回原始 ``data`` 字典；明确空数据返回 ``{}``，没有数据键且非明确为空则计费未知；
 - ``code`` 为 ``"10001"`` 或 ``msgCN``/``message`` 恰为 ``查询数据为空``：合法空结果 ``{}``；
 - 其他业务码、无权限：分别抛 ``upstream_rejected`` / ``upstream_denied``；
 - 无法识别的状态（且非明确空结果）、响应不可解析、结构异常、超时或发送后中断：
@@ -29,7 +29,7 @@
 - ``invalid_argument``：产品不在共享路由白名单、字段/类型/枚举/分页/月年越界，未发请求；
 - ``configuration_error``：凭据缺失/占位/含空白或控制字符、客户端已关闭或
   ``INTEGRATOR_ID`` 路径非法，未发请求；
-- ``upstream_unavailable``：确定未送达、限流或网关重定向，未取得数据，可退避重试；
+- ``upstream_unavailable``：确定未送达、限流或网关重定向，未取得数据，不自动重试；
 - ``upstream_denied``：网关明确拒绝访问（权限/订阅），最终失败，不自动重试；
 - ``upstream_rejected``：网关明确的业务拒绝，最终失败，不自动重试；
 - ``billing_unknown``：请求已发出但无法确定结果或计费状态，禁止隐式重发；
@@ -167,8 +167,6 @@ def _validate_call(product_id: str, params: Mapping[str, Any] | None) -> dict[st
 
     clean: dict[str, Any] = {}
     for name, value in params.items():
-        if value is None:
-            continue
         rule = spec[name]
         if rule["type"] == "string":
             if not isinstance(value, str):
