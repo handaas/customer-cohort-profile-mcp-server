@@ -22,7 +22,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
-from server.common import ROUTES, Fault, Settings, digest
+from server.common import ROUTES, Fault, Settings, _load_routes, digest
 from server.gateway import Gateway
 from server.mcp_server import Application
 from server.store import Store
@@ -540,6 +540,24 @@ class ServiceWorkflow(unittest.IsolatedAsyncioTestCase):
 
 
 class ContractSurface(unittest.TestCase):
+    def test_route_catalog_rejects_invalid_structure_and_duplicate_product_ids(self):
+        cases = (
+            ({"products": {}}, "must contain a products array"),
+            ({"products": [None]}, r"products\[0\] must be an object"),
+            ({"products": [{"product_id": ""}]}, "product_id must be a non-empty string"),
+            ({"products": [
+                {"product_id": "duplicate", "name": "first"},
+                {"product_id": "duplicate", "name": "second"},
+            ]}, "duplicate product_id"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            route_file = Path(directory) / "product-routes.json"
+            for document, message in cases:
+                with self.subTest(message=message):
+                    route_file.write_text(json.dumps(document), encoding="utf-8")
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        _load_routes(route_file)
+
     def test_new_topics_and_products_are_publicly_allowlisted(self):
         from server import mcp_contract
 

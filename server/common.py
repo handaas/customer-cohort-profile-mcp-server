@@ -9,9 +9,31 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 HERE = Path(__file__).resolve().parent
-ROUTES = {r['product_id']: r for r in json.loads((HERE / 'product-routes.json').read_text(encoding='utf-8'))['products']}
+
+
+def _load_routes(path: Path) -> dict[str, dict[str, Any]]:
+    document = json.loads(path.read_text(encoding='utf-8'))
+    entries = document.get('products') if isinstance(document, dict) else None
+    if not isinstance(entries, list):
+        raise RuntimeError('product-routes.json must contain a products array')
+
+    routes = {}
+    for index, route in enumerate(entries):
+        if not isinstance(route, dict):
+            raise RuntimeError(f'products[{index}] must be an object')
+        product_id = route.get('product_id')
+        if not isinstance(product_id, str) or not product_id:
+            raise RuntimeError(f'products[{index}].product_id must be a non-empty string')
+        if product_id in routes:
+            raise RuntimeError(f'duplicate product_id in product-routes.json: {product_id}')
+        routes[product_id] = route
+    return routes
+
+
+ROUTES = _load_routes(HERE / 'product-routes.json')
 
 # 协议常量只在这里定义；各模块从 common 引用，避免计数/枚举各写一份。
 BASE_ROUTING_KEYS = ('identity', 'base', 'supplement')

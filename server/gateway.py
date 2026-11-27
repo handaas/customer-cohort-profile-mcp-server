@@ -126,8 +126,6 @@ def _build_specs() -> dict[str, dict[str, dict[str, Any]]]:
             fields[name] = rule
         specs[product_id] = fields
 
-    if set(specs) != set(ROUTES):
-        raise RuntimeError("上游产品白名单必须完整覆盖共享路由")
     return specs
 
 

@@ -82,8 +82,6 @@ def _load_products() -> Dict[str, Dict[str, str]]:
     for product_id, route in ROUTES.items():
         name = route.get("name")
         topic = route.get("topic")
-        if not isinstance(product_id, str) or not product_id:
-            raise RuntimeError("product-routes.json has an invalid product_id")
         if not isinstance(name, str) or not name:
             raise RuntimeError(f"product {product_id} has an invalid name")
         if topic not in ROUTING_KEYS:
