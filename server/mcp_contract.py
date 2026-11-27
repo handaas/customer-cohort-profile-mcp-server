@@ -62,6 +62,7 @@ TOPIC_KEYS: tuple[str, ...] = (
     "investment",
     "promotion",
     "website",
+    "trademark",
     "risk",
 )
 ROUTING_KEYS: tuple[str, ...] = BASE_ROUTING_KEYS + TOPIC_KEYS
@@ -104,9 +105,9 @@ def _load_products(path: Path) -> Dict[str, Dict[str, str]]:
             raise RuntimeError(f"duplicate product_id in product-routes.json: {product_id}")
         products[product_id] = {"name": name, "routing_key": topic}
 
-    if len(products) != 43:
+    if len(products) != 46:
         raise RuntimeError(
-            f"product-routes.json must contain 43 products, found {len(products)}"
+            f"product-routes.json must contain 46 products, found {len(products)}"
         )
     return products
 
@@ -123,10 +124,10 @@ TOPIC_PRODUCTS: Dict[str, Dict[str, str]] = {
     if record["routing_key"] in TOPIC_KEYS
 }
 
-if len(BASE_PRODUCTS) != 7 or len(TOPIC_PRODUCTS) != 36:
+if len(BASE_PRODUCTS) != 7 or len(TOPIC_PRODUCTS) != 39:
     raise RuntimeError(
         "product-routes.json must describe 7 base/supplement/identity products "
-        f"and 36 topic products, found {len(BASE_PRODUCTS)} and {len(TOPIC_PRODUCTS)}"
+        f"and 39 topic products, found {len(BASE_PRODUCTS)} and {len(TOPIC_PRODUCTS)}"
     )
 
 BASE_PRODUCT_IDS: tuple[str, ...] = tuple(BASE_PRODUCTS)
@@ -1046,8 +1047,8 @@ def _run_output_schema() -> JsonSchema:
         "updated_at": _date_time(),
         "progress": _strict_object(
             {
-                "products_total": _integer(minimum=0, maximum=43),
-                "products_completed": _integer(minimum=0, maximum=43),
+                "products_total": _integer(minimum=0, maximum=46),
+                "products_completed": _integer(minimum=0, maximum=46),
                 "subjects_total": _integer(minimum=0, maximum=100_000),
                 "subjects_completed": _integer(minimum=0, maximum=100_000),
                 "pages_written": _integer(minimum=0, maximum=10_000_000),

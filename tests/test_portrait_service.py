@@ -548,9 +548,11 @@ class ContractSurface(unittest.TestCase):
             'promotion': ('66c33eff3c0917a9a02febdd',),
             'website': ('66a0f258ce3408eb23b56706', '66bf124bf134a4c21b4fc2cb'),
             'risk': ('66bb1aa834d3cd3e43928163', '66a248f381d41651f2689d95'),
+            'trademark': ('66d5b7df537c3f61d646c2dc', '671357d127ab3417e1f3f21b',
+                          '6713537822fc5904b878fbcc'),
         }
-        self.assertEqual(len(mcp_contract.ALL_PRODUCT_IDS), 43)
-        self.assertEqual(len(mcp_contract.TOPIC_KEYS), 17)
+        self.assertEqual(len(mcp_contract.ALL_PRODUCT_IDS), 46)
+        self.assertEqual(len(mcp_contract.TOPIC_KEYS), 18)
         tools = {tool['name']: tool for tool in mcp_contract.build_tools()}
         selections = tools['portrait_plan_topics']['inputSchema']['properties']['selections']['items']['oneOf']
         by_topic = {variant['properties']['topic']['const']: variant for variant in selections}
@@ -560,5 +562,5 @@ class ContractSurface(unittest.TestCase):
                 set(product_ids),
             )
         progress = tools['portrait_get_run']['outputSchema']['properties']['progress']['properties']
-        self.assertEqual(progress['products_total']['maximum'], 43)
-        self.assertEqual(progress['products_completed']['maximum'], 43)
+        self.assertEqual(progress['products_total']['maximum'], 46)
+        self.assertEqual(progress['products_completed']['maximum'], 46)
