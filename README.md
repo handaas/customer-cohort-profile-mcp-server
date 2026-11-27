@@ -14,8 +14,8 @@
 ## 环境要求
 
 - Python 3.10+
-- 依赖包：`mcp>=1.26,<2`、`python-dotenv`、`httpx`、`jsonschema[format-nongpl]`、`uvicorn`，具体版本范围见 [requirements.txt](requirements.txt)
-- 仅需读取服务配置和产品目录，无数据库或任务存储要求
+- 依赖包：`mcp>=1.26,<2`、`python-dotenv`、`httpx`、`uvicorn`，具体版本范围见 [requirements.txt](requirements.txt)
+- 直接查询无需安装配套 Skill，也无需配置产品目录或数据库
 
 ## 本地快速启动
 
@@ -46,19 +46,15 @@ python -m pip install -r requirements.txt
 test -e .env || cp .env.example .env
 ```
 
-| 环境变量 | 默认值 | 用途 |
-| --- | --- | --- |
-| `PORTRAIT_LIVE` | `0` | `0` 允许发现工具、不查上游；`1` 允许发起单次查询，需要网关凭据，可能计费 |
-| `PORTRAIT_HTTP_HOST` / `PORTRAIT_HTTP_PORT` | `127.0.0.1` / `8000` | HTTP 监听地址及端口 |
-| `CUSTOMER_COHORT_PROFILE_MCP_TOKEN` | 未设置 | **HTTP 模式必填**，使用至少 32 个可打印 ASCII 字符的随机专用令牌；STDIO 不使用该令牌 |
-| `PORTRAIT_ALLOWED_HOSTS` / `PORTRAIT_ALLOWED_ORIGINS` | 不添加额外允许项 | 反向代理场景填写可信 Host（需要时带端口）或 Origin（含协议与端口），以英文逗号分隔，不使用通配符 |
-| `INTEGRATOR_ID` / `SECRET_ID` / `SECRET_KEY` | 未设置 | HandaaS 网关凭据，仅在启用真实取数时填写 |
+在 `.env` 中填写自己的旷湖对接器凭据：`INTEGRATOR_ID`、`SECRET_ID`、`SECRET_KEY`，并为对接器开通要查询的数据产品。STDIO 只需填写 [`.env.example`](.env.example) 中的这三项，可直接跳到 [STDIO 版安装部署](#stdio版安装部署)。
 
-服务只自动加载本目录的 `.env`，同名进程环境变量优先。不借用相邻服务的账号。完整配置见 [`.env.example`](.env.example)。
+旷湖凭据只从本项目的 `.env` 或进程环境读取，同名进程环境变量优先。启动和发现工具不访问旷湖；配置凭据后，实际调用查询工具才会请求上游，可能计费。缺少凭据时仍可发现工具，发起查询则会在访问上游前返回配置错误。
+
+升级时不会覆盖旧 `.env`。若旧配置或进程环境仍设置 `PORTRAIT_LIVE=0`，查询继续禁用；要恢复查询，删除该设置即可。`0` 和 `1` 之外的值会导致启动失败。
 
 ### 4. streamable-http启动服务
 
-先在服务端配置 `CUSTOMER_COHORT_PROFILE_MCP_TOKEN`，再启动：
+使用 Streamable HTTP 时，还须在服务端 `.env` 或进程环境中配置 `CUSTOMER_COHORT_PROFILE_MCP_TOKEN`。使用至少 32 个可打印 ASCII 字符的随机专用令牌，再启动：
 
 ```bash
 ./start_mcp_server.sh streamable-http
@@ -71,6 +67,8 @@ python server/mcp_server.py streamable-http
 ```
 
 默认端点：`http://127.0.0.1:8000/mcp`。HTTP 请求必须携带 `Authorization: Bearer <token>`，不要将令牌附在 URL 上。服务支持 `stdio` 和 `streamable-http`，不支持 SSE；直接运行或使用启动脚本不传参数时均默认使用 `stdio`。
+
+通常无需修改 HTTP 监听设置。已有部署仍可用 `PORTRAIT_HTTP_HOST`、`PORTRAIT_HTTP_PORT` 覆盖默认地址和端口。反向代理按需用 `PORTRAIT_ALLOWED_HOSTS`、`PORTRAIT_ALLOWED_ORIGINS` 添加可信 Host（需要时带端口）或 Origin（含协议和端口），以英文逗号分隔，不使用通配符。
 
 ### 5. Cursor / Cherry Studio MCP配置
 
@@ -118,7 +116,7 @@ python server/mcp_server.py streamable-http
 
 ## 可用工具
 
-客户端先用 `tools/list` 发现工具，以工具的参数说明、必填项、默认值和枚举为准。机器可读的产品、输入参数及来源字段见 [产品目录](server/product-routes.json)。不能自选 `product_id`、网关地址或鉴权参数。
+客户端先用 `tools/list` 发现工具，以工具的参数说明、必填项、默认值和枚举为准。产品定义内置在 [`server/mcp_server.py`](server/mcp_server.py)，无需另行下载或配置。不能自选 `product_id`、网关地址或鉴权参数。
 
 - 企业标识查询通常使用 `matchKeyword`；缺省 `keywordType` 时填企业全称。如果用企业 ID、注册号或统一社会信用代码，明确指定对应枚举（以工具为准）。关键词查询只返回候选，不接受 `keywordType`，不要自动认定第一条。上市主营构成另外支持 `reportStockCode`。
 - 分页工具支持 `pageIndex` / `pageSize`，页码从 1 开始。不要把一页认作全量，也不要把 `total` 当成已取得记录数。可选字段不使用时省略，不发 `null`。
@@ -177,8 +175,8 @@ python server/mcp_server.py streamable-http
 
 ## 使用注意事项
 
-- 默认关闭真实查询，仅可发现工具。启用后每次查询最多向上游发起一次请求，可能扣费；翻页和重新提交都是新调用，不自动重试。
-- `isError=true` 时查看脱敏的 `code/message`，不能当作零或空结果。常见错误：`invalid_argument`（参数不符）、`live_disabled`（未启用真查）、`configuration_error`（服务配置问题）、`upstream_denied`（权限拒绝）、`upstream_unavailable`（未取得结果）、`upstream_rejected`（上游明确拒绝）。`billing_unknown` 表示超时、中断或结果格式异常造成的计费不确定，不自动重发。
+- 每次调用查询工具最多向旷湖发起一次请求，可能扣费；翻页和重新提交都是新调用，服务不会自动重试。
+- `isError=true` 时查看脱敏的 `code/message`，不能当作零或空结果。常见错误：`invalid_argument`（参数不符）、`live_disabled`（旧设置显式禁用了查询）、`configuration_error`（服务配置问题）、`upstream_denied`（权限拒绝）、`upstream_unavailable`（未取得结果）、`upstream_rejected`（上游明确拒绝）。`billing_unknown` 表示超时、中断或结果格式异常造成的计费不确定，不自动重发。
 - 当前快照和累计量不能替代历史期间。没有期间过滤的产品，只能按返回记录日期另行判断，不保证历史覆盖。
 - 客户端如需处理名单、确认范围、追踪任务、去重及交付报告，使用配套的 `customer-cohort-profile-skill`。旧版 7 个工作流工具已移除，服务不再使用旧账本、不迁移或续跑旧任务；保留旧数据库和归档，已保存报告仍可离线查看。请为新查询使用新批次，不用新批次绕过旧请求的未知计费状态。
 

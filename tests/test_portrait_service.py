@@ -3,6 +3,7 @@
 import asyncio
 from collections import Counter
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -20,16 +21,22 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
-from server.common import ROUTES, Fault, _load_routes
-from server.gateway import Gateway
-from server.mcp_server import Application, main
-
 ROOT = Path(__file__).resolve().parents[1]
+SERVER_PATH = ROOT / 'server' / 'mcp_server.py'
+SPEC = importlib.util.spec_from_file_location('portrait_mcp_server', SERVER_PATH)
+assert SPEC and SPEC.loader
+mcp_server = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(mcp_server)
+Fault, PortraitMCP, ROUTES = mcp_server.Fault, mcp_server.PortraitMCP, mcp_server.ROUTES
+
 NAME = '合成客户科技有限公司'
-TEST_ENV = {
+CONNECTOR_ENV = {
     'INTEGRATOR_ID': 'offline-integrator',
     'SECRET_ID': 'offline-secret-id',
     'SECRET_KEY': 'offline-sign-key',
+}
+TEST_ENV = {
+    **CONNECTOR_ENV,
     'CUSTOMER_COHORT_PROFILE_MCP_TOKEN': 'offline-only-token-not-a-real-access-key',
     'PORTRAIT_ALLOWED_HOSTS': '',
     'PORTRAIT_ALLOWED_ORIGINS': '',
@@ -76,11 +83,11 @@ class QueryTests(unittest.IsolatedAsyncioTestCase):
         env = patch.dict(os.environ, TEST_ENV)
         env.start()
         self.addCleanup(env.stop)
-        self.app = Application(gateway=Gateway(transport=httpx.MockTransport(self.provider)), live=True)
+        self.app = PortraitMCP(transport=httpx.MockTransport(self.provider))
         self.addCleanup(self.app.close)
 
-    async def call(self, slug, args, *, error=None, app=None):
-        result = await (app or self.app).mcp.call_tool('portrait_query_' + slug, args)
+    async def call(self, slug, args, *, error=None):
+        result = await self.app.call_tool('portrait_query_' + slug, args)
         body = json.loads(result.content[0].text)
         if error:
             self.assertTrue(result.isError)
@@ -96,7 +103,7 @@ class QueryTests(unittest.IsolatedAsyncioTestCase):
         return body['data']
 
     async def test_one_signed_post_for_all_46_fixed_product_tools(self):
-        tools = await self.app.mcp.list_tools()
+        tools = await self.app.list_tools()
         self.assertEqual(len(tools), 46)
         self.assertEqual(len({tool.name for tool in tools}), 46)
         self.assertEqual(len({tool.meta['portrait_product_id'] for tool in tools}), 46)
@@ -153,7 +160,7 @@ class QueryTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(slug=slug, args=args):
                 await self.call(slug, args, error='invalid_argument')
         for name in LEGACY_OPERATIONS:
-            result = await self.app.mcp.call_tool(name, {})
+            result = await self.app.call_tool(name, {})
             self.assertTrue(result.isError)
         self.assertEqual(self.provider.calls, [])
         self.assertEqual(await self.call('annual_reports', {'matchKeyword': NAME, 'arYear': '2024'}), {})
@@ -162,12 +169,10 @@ class QueryTests(unittest.IsolatedAsyncioTestCase):
         }), {})
         self.assertEqual(len(self.provider.calls), 2)
 
-    async def test_off_by_default_and_configuration_failure_do_not_call_provider(self):
-        off = Application(gateway=Gateway(transport=httpx.MockTransport(self.provider)))
-        self.addCleanup(off.close)
-        await self.call('enterprise_base', {'matchKeyword': NAME}, error='live_disabled', app=off)
-        with patch.dict(os.environ, {'SECRET_KEY': ''}):
-            await self.call('enterprise_base', {'matchKeyword': NAME}, error='configuration_error')
+    async def test_missing_or_placeholder_credentials_do_not_call_provider(self):
+        for value in ('', 'your_secret_key'):
+            with self.subTest(value=value), patch.dict(os.environ, {'SECRET_KEY': value}):
+                await self.call('enterprise_base', {'matchKeyword': NAME}, error='configuration_error')
         self.assertEqual(self.provider.calls, [])
 
     async def test_unknown_results_and_valid_empty_answers_are_not_conflated(self):
@@ -287,7 +292,7 @@ class QueryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.provider.calls), 6)
 
     async def test_project_brand_shop_tools_explain_parent_keys(self):
-        tools = {t.name: t for t in await self.app.mcp.list_tools()}
+        tools = {t.name: t for t in await self.app.list_tools()}
         for slug, parent, field, source in (
             ('construction_contracts', 'construction_projects', 'matchKeyword', 'resultList[]._id'),
             ('restaurant_brand_locations', 'restaurant_brands', 'matchKeyword', 'storeList[].brandId'),
@@ -303,14 +308,18 @@ class QueryTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             server = root / 'server'
-            shutil.copytree(ROOT / 'server', server, ignore=shutil.ignore_patterns('__pycache__'))
+            server.mkdir()
+            shutil.copyfile(SERVER_PATH, server / SERVER_PATH.name)
             blocker = root / 'not-a-directory'
             blocker.write_text('unchanged', encoding='utf-8')
+            shadow = root / 'external-pythonpath'
+            shadow.mkdir()
+            (shadow / 'server.py').write_text('raise AssertionError("unrelated module imported")\n', encoding='utf-8')
             env = {
                 'HOME': str(root),
-                'PORTRAIT_LIVE': '0',
                 'PORTRAIT_DB_PATH': str(blocker / 'legacy.sqlite3'),
                 'PYTHONDONTWRITEBYTECODE': '1',
+                'PYTHONPATH': str(shadow),
             }
             before = sorted(root.rglob('*'))
             root.chmod(0o500)
@@ -318,7 +327,7 @@ class QueryTests(unittest.IsolatedAsyncioTestCase):
                 for args in ([], ['stdio', '--query-contract', 'v1']):
                     with self.subTest(args=args):
                         child = StdioServerParameters(
-                            command=sys.executable, args=[str(server / 'mcp_server.py'), *args], env=env,
+                            command=sys.executable, args=[str(server / SERVER_PATH.name), *args], env=env,
                         )
                         async with stdio_client(child) as streams, ClientSession(*streams) as client:
                             await client.initialize()
@@ -327,11 +336,86 @@ class QueryTests(unittest.IsolatedAsyncioTestCase):
                             self.assertTrue(all(t.meta['portrait_query_contract'] == 'v1' for t in tools))
                             result = await client.call_tool('portrait_query_enterprise_base', {'matchKeyword': NAME})
                             self.assertTrue(result.isError)
-                            self.assertEqual(json.loads(result.content[0].text)['code'], 'live_disabled')
+                            self.assertEqual(json.loads(result.content[0].text)['code'], 'configuration_error')
             finally:
                 root.chmod(0o700)
             self.assertEqual(sorted(root.rglob('*')), before)
             self.assertEqual(blocker.read_text(encoding='utf-8'), 'unchanged')
+
+    async def test_stdio_connector_credentials_are_sufficient_and_legacy_off_stays_disabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            server = root / 'server'
+            server.mkdir()
+            shutil.copyfile(SERVER_PATH, server / SERVER_PATH.name)
+            (root / '.env').write_text(
+                ''.join(f'{key}={value}\n' for key, value in CONNECTOR_ENV.items()), encoding='utf-8',
+            )
+            # Run the real CLI with a provider that counts every would-be HTTP request.
+            probe = root / 'run_with_mock.py'
+            probe.write_text(
+                """import importlib.util
+import json
+from pathlib import Path
+from urllib.parse import parse_qs
+import httpx
+
+root = Path(__file__).parent
+spec = importlib.util.spec_from_file_location('portrait_mcp_server', root / 'server' / 'mcp_server.py')
+assert spec and spec.loader
+mcp_server = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mcp_server)
+calls = root / 'calls.jsonl'
+def fetch(request):
+    assert request.method == 'POST' and request.url.host == 'console.handaas.com'
+    form = parse_qs(request.content.decode())
+    assert set(form) == {'product_id', 'secret_id', 'params', 'signature'}
+    with calls.open('a', encoding='utf-8') as log:
+        log.write(json.dumps(form) + '\\n')
+    return httpx.Response(200, json={'code': 10000, 'data': {'name': '测试企业'}})
+
+class MockMCP(mcp_server.PortraitMCP):
+    def __init__(self, **kwargs):
+        super().__init__(transport=httpx.MockTransport(fetch), **kwargs)
+
+mcp_server.PortraitMCP = MockMCP
+mcp_server.main()
+""", encoding='utf-8',
+            )
+            calls = root / 'calls.jsonl'
+            env = {'HOME': str(root), 'PYTHONDONTWRITEBYTECODE': '1'}
+            legacy_env = {'PORTRAIT_LIVE': '0', 'PORTRAIT_ALLOWED_HOSTS': '*'}
+            for legacy in (False, True):
+                with self.subTest(legacy_disabled=legacy):
+                    child = StdioServerParameters(
+                        command=sys.executable,
+                        args=[str(probe), 'stdio', '--query-contract', 'v1'],
+                        env={**env, **(legacy_env if legacy else {})},
+                    )
+                    async with stdio_client(child) as streams, ClientSession(*streams) as client:
+                        await client.initialize()
+                        self.assertEqual(len((await client.list_tools()).tools), 46)
+                        self.assertFalse(calls.exists(), 'discovery must not call the provider')
+                        result = await client.call_tool('portrait_query_enterprise_base', {'matchKeyword': NAME})
+                        if legacy:
+                            self.assertTrue(result.isError)
+                            self.assertEqual(json.loads(result.content[0].text)['code'], 'live_disabled')
+                            self.assertFalse(calls.exists())
+                        else:
+                            self.assertFalse(result.isError)
+                            self.assertEqual(result.structuredContent, {'data': {'name': '测试企业'}})
+                            forms = [json.loads(row) for row in calls.read_text(encoding='utf-8').splitlines()]
+                            self.assertEqual(len(forms), 1)
+                            form = forms[0]
+                            self.assertEqual(form['product_id'], ['66dbccbec7a7e3460f5e613f'])
+                            self.assertEqual(form['secret_id'], [CONNECTOR_ENV['SECRET_ID']])
+                            self.assertEqual(json.loads(form['params'][0]), {'matchKeyword': NAME})
+                            expected = (
+                                form['params'][0] + form['product_id'][0] + form['secret_id'][0]
+                                + CONNECTOR_ENV['SECRET_KEY']
+                            )
+                            self.assertEqual(form['signature'], [hashlib.md5(expected.encode()).hexdigest()])
+                            calls.unlink()
 
     async def test_guarded_http_transport_discovery_and_single_query(self):
         started = asyncio.Event()
@@ -345,15 +429,25 @@ class QueryTests(unittest.IsolatedAsyncioTestCase):
             ready_socket.bind(('127.0.0.1', 0))
             ready_socket.listen()
             path = f'http://127.0.0.1:{ready_socket.getsockname()[1]}/mcp'
-            server = TestServer(uvicorn.Config(self.app.http_app(), ws='none', log_level='error', access_log=False))
+            with patch.dict(os.environ, {
+                'PORTRAIT_ALLOWED_HOSTS': 'portrait.example',
+                'PORTRAIT_ALLOWED_ORIGINS': 'https://client.example',
+            }):
+                http_app = self.app.streamable_http_app()
+            server = TestServer(uvicorn.Config(http_app, ws='none', log_level='error', access_log=False))
             running = asyncio.create_task(server.serve(sockets=[ready_socket]))
             try:
                 await asyncio.wait_for(started.wait(), 5)
                 async with httpx.AsyncClient(trust_env=False) as http:
                     self.assertEqual((await http.post(path, json={})).status_code, 401)
+                    self.assertEqual(
+                        (await http.post(path, json={}, headers={'Authorization': 'Bearer wrong-token'})).status_code,
+                        401,
+                    )
                     http.headers['Authorization'] = 'Bearer ' + TEST_ENV['CUSTOMER_COHORT_PROFILE_MCP_TOKEN']
                     self.assertEqual((await http.post(path, headers={'Host': 'evil.invalid'}, json={})).status_code, 421)
                     self.assertEqual((await http.post(path, headers={'Origin': 'https://evil.invalid'}, json={})).status_code, 403)
+                    http.headers.update({'Host': 'portrait.example', 'Origin': 'https://client.example'})
                     async with streamable_http_client(path, http_client=http) as (rd, wr, _), ClientSession(rd, wr) as client:
                         await client.initialize()
                         tool_names = {t.name for t in (await client.list_tools()).tools}
@@ -376,39 +470,37 @@ class QueryTests(unittest.IsolatedAsyncioTestCase):
     async def test_http_requires_a_dedicated_token(self):
         with patch.dict(os.environ, {'CUSTOMER_COHORT_PROFILE_MCP_TOKEN': 'short'}):
             with self.assertRaises(Fault):
-                self.app.http_app()
+                self.app.streamable_http_app()
 
 
 class RegistryTests(unittest.TestCase):
     def test_wrong_query_contract_exits_before_config_or_app(self):
         with patch.object(sys, 'argv', ['mcp_server.py', 'stdio', '--query-contract', 'v2']), \
-                patch('server.mcp_server.load_dotenv') as load_config, \
-                patch('server.mcp_server.Application') as app, \
+                patch.object(mcp_server, 'load_dotenv') as load_config, \
+                patch.object(mcp_server, 'PortraitMCP') as app, \
                 patch('sys.stderr'):
             with self.assertRaises(SystemExit) as raised:
-                main()
+                mcp_server.main()
         self.assertEqual(raised.exception.code, 2)
         load_config.assert_not_called()
         app.assert_not_called()
 
-    def test_route_catalog_rejects_bad_structure_or_duplicate_mappings(self):
-        valid = {'product_id': 'product-X', 'tool_name': 'portrait_query_first'}
-        cases = (
-            ({'products': {}}, 'must contain a non-empty products array'),
-            ({'products': []}, 'must contain a non-empty products array'),
-            ({'products': [None]}, r'products\[0\] must be an object'),
-            ({'products': [{'product_id': ''}]}, 'product_id must be a non-empty string'),
-            ({'products': [valid, {**valid, 'tool_name': 'portrait_query_second'}]}, 'duplicate product_id'),
-            ({'products': [valid, {**valid, 'product_id': 'product-Y'}]}, 'duplicate tool_name'),
-            ({'products': [{**valid, 'tool_name': 'portrait_plan_base'}]}, 'valid query name'),
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            registry = Path(directory) / 'product-routes.json'
-            for document, message in cases:
-                with self.subTest(message=message):
-                    registry.write_text(json.dumps(document), encoding='utf-8')
-                    with self.assertRaisesRegex(RuntimeError, message):
-                        _load_routes(registry)
+    def test_invalid_legacy_live_flag_fails_before_constructing_server(self):
+        for value in ('', 'yes'):
+            with self.subTest(value=value), patch.dict(os.environ, {'PORTRAIT_LIVE': value}), \
+                    patch.object(sys, 'argv', ['mcp_server.py']), patch.object(mcp_server, 'load_dotenv'), \
+                    patch.object(mcp_server, 'PortraitMCP') as app:
+                with self.assertRaises(Fault) as raised:
+                    mcp_server.main()
+                self.assertEqual(raised.exception.code, 'configuration_error')
+                app.assert_not_called()
+
+    def test_published_entrypoint_and_environment_need_no_extra_files(self):
+        self.assertEqual(set((ROOT / '.env.example').read_text().splitlines()), {
+            f'{key}=' for key in CONNECTOR_ENV
+        })
+        self.assertEqual(list(SERVER_PATH.parent.glob('*.py')), [SERVER_PATH])
+        self.assertFalse((SERVER_PATH.parent / 'product-routes.json').exists())
 
     def test_trademarks_products_remain_public(self):
         expected = {
