@@ -11,7 +11,7 @@ import sqlite3
 import stat
 from contextlib import contextmanager
 
-from server.common import Fault, Settings, later, now, pack, uid
+from server.common import VIEWS, Fault, Settings, later, now, pack, uid
 
 CORE_DDL = '''
 CREATE TABLE IF NOT EXISTS snapshots(
@@ -26,7 +26,6 @@ INSERT OR IGNORE INTO store_meta VALUES ('cursor_key',randomblob(32));
 '''
 ANCESTORS = '''WITH RECURSIVE lineage(id,depth) AS (
  VALUES(?,0) UNION ALL SELECT s.parent_id,l.depth+1 FROM snapshots s JOIN lineage l ON s.id=l.id WHERE s.parent_id IS NOT NULL) '''
-VIEWS = frozenset(('identities', 'candidates', 'subjects', 'evidence', 'coverage'))
 
 
 class Store:

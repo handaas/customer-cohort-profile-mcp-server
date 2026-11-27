@@ -26,7 +26,18 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
-from server.common import ROUTES, Fault, digest, later, now, pack, uid
+from server.common import (
+    ROUTES,
+    RUN_ERROR_CODES as RUN_ERROR_CODE_NAMES,
+    RUN_STATES,
+    PAGE_VIEWS,
+    Fault,
+    digest,
+    later,
+    now,
+    pack,
+    uid,
+)
 
 LOG = logging.getLogger('portrait.execution')
 
@@ -95,19 +106,10 @@ CREATE INDEX IF NOT EXISTS execution_dispatches_request
 CREATE INDEX IF NOT EXISTS execution_dispatches_run ON execution_dispatches(run_id,state);
 '''
 
-RUN_STATES = ('queued', 'running', 'partial', 'succeeded', 'failed', 'cancelled')
 TERMINAL_STATES = frozenset(('succeeded', 'failed', 'cancelled'))
 NONTERMINAL_STATES = frozenset(('queued', 'running'))
-PAGE_VIEWS = ('identities', 'candidates', 'subjects', 'evidence', 'coverage')
-
-#: 只有这些错误码可以写入 Run.error（与 mcp_contract.RUN_ERROR_CODES 一致）。
-RUN_ERROR_CODES = frozenset((
-    'invalid_argument', 'plan_hash_mismatch', 'plan_expired', 'plan_not_executable',
-    'limit_exceeded', 'out_of_scope', 'roster_incomplete', 'no_applicable_subjects',
-    'snapshot_not_found', 'snapshot_expired', 'cursor_invalid', 'run_not_found',
-    'conflict', 'already_running', 'upstream_unavailable', 'partial_failure',
-    'billing_unknown', 'cancelled', 'internal_error',
-))
+#: 错误码集合由 common 的协议常量派生，避免与契约各写一份。
+RUN_ERROR_CODES = frozenset(RUN_ERROR_CODE_NAMES)
 
 #: 计入调用硬帽的派发状态。reused 复用本地已取得数据，不占上游额度。
 _USED_CALL_STATES = "('done','failed','inflight','uncertain','reserved')"
@@ -424,8 +426,8 @@ class Engine:
             'created_at': row['created_at'],
             'updated_at': row['updated_at'],
             'progress': {
-                'products_total': _clamp(row['products_total'], 0, 46),
-                'products_completed': _clamp(row['products_completed'], 0, 46),
+                'products_total': _clamp(row['products_total'], 0, len(ROUTES)),
+                'products_completed': _clamp(row['products_completed'], 0, len(ROUTES)),
                 'subjects_total': _clamp(row['subjects_total'], 0, 100_000),
                 'subjects_completed': _clamp(row['subjects_completed'], 0, 100_000),
                 'pages_written': _clamp(row['pages_written'], 0, 10_000_000),

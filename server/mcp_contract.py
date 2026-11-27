@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Export the design-time MCP contract for the customer-cohort-profile service.
 
-This module is *not* an MCP server and performs no I/O beyond reading the
-bundled ``product-routes.json`` and printing JSON.  It uses only the Python
-standard library and has no dependency on a sibling skill, the old MCP server,
-or a live catalogue service.  The emitted JSON Schemas are fully expanded and
-self-contained.
+This module is *not* an MCP server.  It reads the shared route table from
+``server.common`` and prints JSON; it uses only the Python standard library
+and has no dependency on a sibling skill, a live catalogue, or network access.
+The emitted JSON Schemas are fully expanded and self-contained.
 
 Run from the repository root:
 
-    python3 docs/customer-cohort-profile/mcp_contract.py
+    python3 -m server.mcp_contract
 
 The stdout document has the MCP ``tools/list`` shape::
 
@@ -33,6 +32,17 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from server.common import (
+    BASE_ROUTING_KEYS,
+    PAGE_VIEWS,
+    ROUTES,
+    RUN_ERROR_CODES,
+    RUN_STATES,
+)
+
 JsonSchema = Dict[str, Any]
 SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 
@@ -42,9 +52,7 @@ SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 # emitted contract has no external $ref and no second product whitelist.
 # ---------------------------------------------------------------------------
 
-PRODUCT_ROUTES_PATH = Path(__file__).with_name("product-routes.json")
-
-BASE_ROUTING_KEYS: tuple[str, ...] = ("identity", "base", "supplement")
+# 话题顺序即发布的 schema 顺序；产品集合由共享路由表提供。
 TOPIC_KEYS: tuple[str, ...] = (
     "factory",
     "channel",
@@ -68,51 +76,25 @@ TOPIC_KEYS: tuple[str, ...] = (
 ROUTING_KEYS: tuple[str, ...] = BASE_ROUTING_KEYS + TOPIC_KEYS
 
 
-def _load_products(path: Path) -> Dict[str, Dict[str, str]]:
-    """Read product_id/name/topic from the bundled route file.
-
-    Only these three fields are copied.  The contract deliberately does not
-    depend on the rest of the route file or on any live catalogue.
-    """
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            document = json.load(handle)
-    except OSError as exc:
-        raise RuntimeError(f"cannot read bundled product routes: {path}") from exc
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"invalid JSON in bundled product routes: {path}") from exc
-
-    routes = document.get("products") if isinstance(document, dict) else None
-    if not isinstance(routes, list):
-        raise RuntimeError("product-routes.json must contain a products array")
-
+def _load_products() -> Dict[str, Dict[str, str]]:
+    """Copy product_id/name/topic from the shared route table."""
     products: Dict[str, Dict[str, str]] = {}
-    for index, route in enumerate(routes):
-        if not isinstance(route, dict):
-            raise RuntimeError(f"products[{index}] must be an object")
-        product_id = route.get("product_id")
+    for product_id, route in ROUTES.items():
         name = route.get("name")
         topic = route.get("topic")
         if not isinstance(product_id, str) or not product_id:
-            raise RuntimeError(f"products[{index}].product_id must be a non-empty string")
+            raise RuntimeError("product-routes.json has an invalid product_id")
         if not isinstance(name, str) or not name:
-            raise RuntimeError(f"products[{index}].name must be a non-empty string")
+            raise RuntimeError(f"product {product_id} has an invalid name")
         if topic not in ROUTING_KEYS:
-            raise RuntimeError(
-                f"products[{index}].topic={topic!r} is not one of {ROUTING_KEYS!r}"
-            )
-        if product_id in products:
-            raise RuntimeError(f"duplicate product_id in product-routes.json: {product_id}")
+            raise RuntimeError(f"product {product_id} has invalid topic {topic!r}")
         products[product_id] = {"name": name, "routing_key": topic}
-
-    if len(products) != 46:
-        raise RuntimeError(
-            f"product-routes.json must contain 46 products, found {len(products)}"
-        )
+    if not products:
+        raise RuntimeError("product-routes.json is empty")
     return products
 
 
-PRODUCTS: Dict[str, Dict[str, str]] = _load_products(PRODUCT_ROUTES_PATH)
+PRODUCTS: Dict[str, Dict[str, str]] = _load_products()
 BASE_PRODUCTS: Dict[str, Dict[str, str]] = {
     product_id: record
     for product_id, record in PRODUCTS.items()
@@ -124,11 +106,8 @@ TOPIC_PRODUCTS: Dict[str, Dict[str, str]] = {
     if record["routing_key"] in TOPIC_KEYS
 }
 
-if len(BASE_PRODUCTS) != 7 or len(TOPIC_PRODUCTS) != 39:
-    raise RuntimeError(
-        "product-routes.json must describe 7 base/supplement/identity products "
-        f"and 39 topic products, found {len(BASE_PRODUCTS)} and {len(TOPIC_PRODUCTS)}"
-    )
+if not BASE_PRODUCTS or not TOPIC_PRODUCTS:
+    raise RuntimeError("product-routes.json does not describe both base and topic products")
 
 BASE_PRODUCT_IDS: tuple[str, ...] = tuple(BASE_PRODUCTS)
 TOPIC_PRODUCT_IDS: tuple[str, ...] = tuple(TOPIC_PRODUCTS)
@@ -156,21 +135,6 @@ TOOL_NAMES: tuple[str, ...] = (
     "portrait_read_page",
 )
 
-RUN_STATES: tuple[str, ...] = (
-    "queued",
-    "running",
-    "partial",
-    "succeeded",
-    "failed",
-    "cancelled",
-)
-PAGE_VIEWS: tuple[str, ...] = (
-    "identities",
-    "candidates",
-    "subjects",
-    "evidence",
-    "coverage",
-)
 PLAN_STAGES: tuple[str, ...] = ("base", "resolution", "topics")
 
 # ---------------------------------------------------------------------------
@@ -197,28 +161,6 @@ BLOCKER_CODES: tuple[str, ...] = (
     "subject_limit_exceeded",
     "paging_limit_invalid",
     "snapshot_incomplete",
-)
-
-RUN_ERROR_CODES: tuple[str, ...] = (
-    "invalid_argument",
-    "plan_hash_mismatch",
-    "plan_expired",
-    "plan_not_executable",
-    "limit_exceeded",
-    "out_of_scope",
-    "roster_incomplete",
-    "no_applicable_subjects",
-    "snapshot_not_found",
-    "snapshot_expired",
-    "cursor_invalid",
-    "run_not_found",
-    "conflict",
-    "already_running",
-    "upstream_unavailable",
-    "partial_failure",
-    "billing_unknown",
-    "cancelled",
-    "internal_error",
 )
 
 ERROR_NOTE = (
@@ -995,14 +937,6 @@ def _run_error_schema() -> JsonSchema:
         required=["code", "message", "retryable"],
         description="脱敏错误；不包含名单、令牌、签名或上游原始报文。",
     )
-    # Keep a stable shape while allowing retry_after_seconds only when retryable.
-    schema["allOf"] = [
-        _conditional(
-            {"properties": {"retryable": {"const": False}}, "required": ["retryable"]},
-            _not_required("retry_after_seconds"),
-        )
-    ]
-    return schema
 
 
 def _run_result_schema() -> JsonSchema:
@@ -1047,8 +981,8 @@ def _run_output_schema() -> JsonSchema:
         "updated_at": _date_time(),
         "progress": _strict_object(
             {
-                "products_total": _integer(minimum=0, maximum=46),
-                "products_completed": _integer(minimum=0, maximum=46),
+                "products_total": _integer(minimum=0, maximum=len(PRODUCTS)),
+                "products_completed": _integer(minimum=0, maximum=len(PRODUCTS)),
                 "subjects_total": _integer(minimum=0, maximum=100_000),
                 "subjects_completed": _integer(minimum=0, maximum=100_000),
                 "pages_written": _integer(minimum=0, maximum=10_000_000),

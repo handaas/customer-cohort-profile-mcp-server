@@ -29,7 +29,6 @@ MISSING = object()
 DISPLAY_LIMIT = 2000
 CONTAINER_LIMIT = 50
 MAX_FIELDS_PER_RECORD = 200
-MAX_PAGES_FOR_EVIDENCE = 50
 
 _ZERO_RE = re.compile(
     r"^\s*[+-]?(?:0+(?:\.0*)?|\.0+)(?:[eE][+-]?\d+)?\s*[%％]?\s*$"

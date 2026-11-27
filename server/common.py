@@ -13,6 +13,19 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROUTES = {r['product_id']: r for r in json.loads((HERE / 'product-routes.json').read_text(encoding='utf-8'))['products']}
 
+# 协议常量只在这里定义；各模块从 common 引用，避免计数/枚举各写一份。
+BASE_ROUTING_KEYS = ('identity', 'base', 'supplement')
+PAGE_VIEWS = ('identities', 'candidates', 'subjects', 'evidence', 'coverage')
+VIEWS = frozenset(PAGE_VIEWS)
+RUN_STATES = ('queued', 'running', 'partial', 'succeeded', 'failed', 'cancelled')
+RUN_ERROR_CODES = (
+    'invalid_argument', 'plan_hash_mismatch', 'plan_expired', 'plan_not_executable',
+    'limit_exceeded', 'out_of_scope', 'roster_incomplete', 'no_applicable_subjects',
+    'snapshot_not_found', 'snapshot_expired', 'cursor_invalid', 'run_not_found',
+    'conflict', 'already_running', 'upstream_unavailable', 'partial_failure',
+    'billing_unknown', 'cancelled', 'internal_error',
+)
+
 
 class Fault(Exception):
     def __init__(self, code: str, message: str):

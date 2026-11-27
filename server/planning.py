@@ -29,6 +29,7 @@ from datetime import date
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from server.common import (
+    BASE_ROUTING_KEYS,
     Fault,
     ROUTES,
     digest,
@@ -118,7 +119,6 @@ CREATE INDEX IF NOT EXISTS plans_roster
 # Trusted route catalogue
 # ---------------------------------------------------------------------------
 
-BASE_ROUTING_KEYS: Tuple[str, ...] = ("identity", "base", "supplement")
 CORE_BASE_NAMES: Tuple[str, ...] = ("工商照面", "企业标签", "企业指标")
 IDENTITY_NAME = "关键词查询企业"
 SUPPLEMENT_NAMES: Tuple[str, ...] = (
